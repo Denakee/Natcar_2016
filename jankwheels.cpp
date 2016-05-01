@@ -1,10 +1,27 @@
-#include <bitset>
+/* Jank Wheels Drive Software
+ * Created By: Greg Balke
+ * Date: April 2016
+ */ 
+
 #include <cmath>
-#include <string>
 #include "Arduino.h"
+#include "HardwareSerial.h"
 
 #include "WProgram.h"
 //#include "Servo.h"
+
+//Working Values:
+//	kp = 0.58
+//	kd = -0.58, -0.53
+//	ki = 0.01
+const int driveSpeed = 400;		// Drive speed for motors.
+const float kp = 0.58;			// Proportional Correction Constant.
+const float kd = -0.6;// -0.6;			// Derivative Multiplier.
+const float ki = 0;//0.05;				// Integral Multiplier.
+const int centerPoint = 60;
+
+// BLUETOOTH START SETTING //
+#define BTSTART 1
 
 // IO defines //
 #define ao 	20
@@ -13,7 +30,7 @@
 
 #define srv 17
 
-#define drv 11
+#define drv 16
 #define brk 12
 
 // Constants //
@@ -22,12 +39,19 @@
 #define FWD 0
 #define BCK 1
 
+// Serial //
+#define SERIALBT 1
+#define PRINTLINE 0
+#define BAUD 115200
+
+#define HWSerial Serial1
+
 // Variables //
 const int size = 128;			// Pixel Width of Line Cam.
 const int maxVal = 1024;		// Largest Light Val Output.
 
 const int clear = 15;			// Delay for Cam Exposure.
-const int endDelay = 100;		// Large Delay for Image to Buffer over Serial (set to 0 when running).
+const int endDelay = 0;		// Large Delay for Image to Buffer over Serial (set to 0 when running).
 const int time = 2;				// Time for duty cycle calc.
 const float duty = 0.5;			// Duty cycle multiplier.
 const int d1 = time * duty;		// Calculating Time for On Period.
@@ -35,15 +59,11 @@ const int d2 = time - d1;		// Calculating Time for Off Period.
 
 const int mapScale = 50;		// Scaling of Map for Serial.
 
-const float kp = 1;				// Proportional Correction Constant.
-const float kd = 0;				// Derivative Multiplier.
-const float ki = 0;				// Integral Multiplier.
-
 // SERVO CONSTS DO NOT TOUCH UNLESS TESTING ON OSCILLISCOPE //
 const int freq = 50;			// 50Hz frequency (20ms) period for signal.
 const int precision = 11;		// Number of bits of precision on servo.
 const int maxServo = pow ( 2,precision ) / 16;
-const int servoMid = 85;
+const int servoMid = 80;
 const int servoShift = 30;
 
 int error = 0;					// Accummulated Error (integral).
@@ -59,11 +79,15 @@ void lineUpdate ();				// Pulls new data from the Cam.
 void linePrint  ();				// Prints the Height Map to Serial.
 void drive      ();				// PID & Drive control.
 
+// Timer //
+//elapsedMillis dt;
 //PWMServo servo;					// The Servo Object.
 
 // pwm clk 128,1
 int main () 
 {
+	bool MANUAL = false;
+
 	// Initializing pins.
 	pinMode (clk, OUTPUT);
 	pinMode (si, OUTPUT);
@@ -72,34 +96,122 @@ int main ()
 	pinMode (srv, OUTPUT);
 
 	// Initializing Serial.
-	Serial.begin(9600);
-
-	// Set Servo to 0 (testing).
-	analogWriteFrequency(srv, freq);
-	analogWriteResolution ( precision );
-
-	//analogWrite (srv, servoMid + servoShift); // Max 64.
-
-	// Testing motors.
-	pinMode (drv, OUTPUT);
-	pinMode (brk, OUTPUT);
-
-	digitalWrite (brk, LOW);
-	digitalWrite (drv, HIGH);
+	HWSerial.begin(BAUD);	
 
 	while (1)
 	{
-		
 
-		// Takes a new scan from cam.
-		lineUpdate ();
+		if (BTSTART)
+		{
+			char incomingByte='\0';
+			char COM[2] = "";
+			int count = 0;
+	
+			while (1)
+			{
+				if (HWSerial.available() > 0) {
+					incomingByte = HWSerial.read();	
+		            HWSerial.print("UART received:");
+		            HWSerial.println(incomingByte, DEC);
+	
+					HWSerial.print(count + "\0");
+	
+					COM[count] = incomingByte;
+					count++;
+	
+					if (count >= 2)
+						count = 0;
+				}
+	
+				if (COM[0] == 'S' && COM[1] == 'T')
+				{
+					HWSerial.println("Starting");
+					break;
+				}
+				else if (COM[0] == 'M' && COM[1] == 'N')
+				{
+					HWSerial.println("Starting Manual");
+					MANUAL = true;
+					break;
+				}
+			
+				delayMicroseconds(100);
+	
+			}
+		}
+			
+		// Set Servo to 0 (testing).
+		analogWriteFrequency(srv, freq);
+		analogWriteResolution ( precision );
+	
+		//analogWrite (srv, servoMid + servoShift); // Max 64.
+	
+		// Testing motors.
+		pinMode (drv, OUTPUT);
+		pinMode (brk, OUTPUT);
+	
+		digitalWrite (brk, LOW);
 
-		// PID.
-		drive      ();
+		bool ON = true;
 
-		// Print height map to Serial.
-		linePrint  ();
+		while (1 && ON)
+		{
+			if (MANUAL)
+			{
+				analogWrite (drv, 0);
+				analogWrite (srv, servoMid);
+
+				if (HWSerial.available() > 0) {
+					switch (HWSerial.read())
+					{
+						case 'w':
+							analogWrite (drv, driveSpeed/1.5);
+							break;
+						case 'a':
+							analogWrite (srv, servoMid - 20);
+							break;
+						case 'd':
+							analogWrite (srv, servoMid + 20);
+							break;
+						case 'k':
+							ON = false;
+							break;
+					}
+				}
+
+				delayMicroseconds(100000);
+			}
+			else
+			{
+				if (BTSTART)
+				{
+					if (HWSerial.available() > 0) {
+						if (HWSerial.read() == 'k')
+							break;
+					}
+				}		
+	
+				// Takes a new scan from cam.
+				lineUpdate ();
+	
+				// PID.
+				drive      ();
+	
+				analogWrite (drv, driveSpeed - abs(driveSpeed * (lastErr/40)));
+			
+			}
+			if (SERIALBT && PRINTLINE)
+			{
+				// Print height map to Serial.
+				linePrint  ();
+			}
+		}
+	
+		analogWrite (drv, 0);
+		HWSerial.println ("END");
+
 	}
+
 }
 
 void lineUpdate ()
@@ -166,18 +278,18 @@ void linePrint ()
 	{
 		for (int j = 0; j < size; j++)
 		{
-			Serial.print ((heightMap[j] >= i)?"*":" ");
+			HWSerial.print ((heightMap[j] >= i)?"*":" ");
 		}
 
-		Serial.println();
+		HWSerial.print('\n');
 		//Serial.print( intImage[i] );
 		//Serial.print( " " );
 	}
 
 	delay (endDelay);
 
-	Serial.print( "\033[2J" );
-	Serial.print( "\033[20;0H" );
+	HWSerial.print( "\033[2J" );
+	HWSerial.print( "\033[20;0H" );
 }
 
 // Using PID
@@ -190,7 +302,7 @@ void drive ()
 
 	derivative[0] = intImage[0] - intImage[1];
 
-	for (int i = 0; i < size - 1; i++)
+	for (int i = 0; i < size - 4; i++)
 	{
 		derivative[i] = intImage[i] - intImage[i+1];	
 		
@@ -204,11 +316,11 @@ void drive ()
 		}
 	}
 
-	err = ((high + low)/2) - 64;
+	err = ((high + low)/2) - centerPoint;
 
 	error += err;
 
-	PID = (err * kp) + (((lastErr - err)/20) * kd) + (error * ki);
+	PID = (err * kp) + (((lastErr - err)) * kd) + (error * ki);
 
 	if ( PID > -servoShift || PID < servoShift )
 	{
@@ -217,5 +329,9 @@ void drive ()
 
 	lastErr = err;
 	
-	Serial.println (err);
+	//dt = 0;
+
+	//HWSerial.println (high);
+	//HWSerial.println (low);
+	HWSerial.print (err + '\n');
 }
