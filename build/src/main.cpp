@@ -74,8 +74,6 @@ const int maxServo = pow ( 2,precision ) / 16;
 const int servoMid = 80;
 const int servoShift = 30;
 
-int MODE = 0;					// 0 = Automated, 1 = Manual, 2 = Settings
-
 int error = 0;					// Accummulated Error (integral).
 int lastErr = 0;
 
@@ -109,16 +107,20 @@ int main ()
 	pinMode (srv, OUTPUT);
 
 	CamControl cam ( clk, ao, si, size );
-	BlueCom bt;
 
-	// Initializing Serial.
-	HWSerial.begin(BAUD);	
+	BlueCom *bt;
 
-	//delay ( 2000 );
+	if (SERIALBT)
+		bt = new BlueCom (BAUD);
+	else
+	{
+		// Initializing Serial.
+		HWSerial.begin(BAUD);	
 
-	HWSerial.println("Booting");
+		//delay ( 2000 );
 
-	//HWSerial.print("AT+PIN4678");
+		HWSerial.println("Booting");
+	}
 		
 	// Set Servo to 0 (testing).
 	analogWriteFrequency(srv, freq);
@@ -135,30 +137,29 @@ int main ()
 	while (1)
 	{
 		
-		MODE = 0;
+		CVS.mode = OFF;
 
 		if (BTSTART)
 		{
-			while (BTCheck())
+			while (!(CVS.mode = bt->BTCheck()))
 			{
 				//lineUpdate();
 				delayMicroseconds(10000);
 
 				//drive ();
 			}
+
 		}
-		
-		CVS.mode = ON;
 
 		digitalWrite (brk, LOW);
 
 		while (CVS.mode)
 		{	
-			if (MODE == 0)
+			if (CVS.mode == ON)
 			{
 				if (BTSTART)
 				{
-					if (!bt.settings( & CVS ))
+					if (!bt->checkKill())
 						break;
 				}		
 	
@@ -178,12 +179,10 @@ int main ()
 					linePrint  ();
 				}	
 			}
-			else if (MODE == 1)
+			else if (CVS.mode == MANUAL)
 				manualDrive();
-			else if (MODE == 2)
-			{
-				bt.settings( & CVS );
-			}
+			else if (CVS.mode == SETTINGS)
+				bt->settings( CVS );
 		}
 		
 		//HWSerial.clear();
@@ -195,7 +194,6 @@ int main ()
 
 		HWSerial.print ("END. Sum Error: ");
 		HWSerial.println (error);
-		MODE = 0;
 		error = 0;
 	}
 
@@ -256,7 +254,11 @@ void drive ()
 	{
 		err = lastErr;
 	}
-	error += err;
+
+	if (!( abs(error + err) > 250 ))
+	{
+		error += err;
+	}
 
 	PID = (err * CVS.kp) + (((lastErr - err)) * CVS.kd) + (error * CVS.ki);
 
@@ -265,22 +267,13 @@ void drive ()
 		analogWrite (srv, servoMid + (int)PID);
 	}
 
-	lastErr = err;
-	
-	//dt = 0;
-	if (ON)
-	{
-		//HWSerial.println (high);
-		//HWSerial.println (low);
-		//HWSerial.print (err);
-		//HWSerial.print (" ");
-	}
+	lastErr = err;	
 }
 
 void manualDrive ()
 {
 	analogWrite (drv, 0);
-	analogWrite (srv, servoMid);
+	//analogWrite (srv, servoMid);
 
 	if (HWSerial.available() > 0) {
 		switch (HWSerial.read())
@@ -294,62 +287,16 @@ void manualDrive ()
 			case 'd':
 				analogWrite (srv, servoMid + 20);
 				break;
+			case 's':
+				analogWrite (srv, servoMid);
+				break;
 			case 'k':
 				CVS.mode = OFF;
 				break;
 		}
 	}
 
-	delayMicroseconds(100000);
+	delayMicroseconds(100);
 }
-
-bool BTCheck ()
-{
-	static char incomingByte='\0';
-	static char COM[2] = "";
-	static int count = 0;
-	
-	if (HWSerial.available() > 0) {
-		incomingByte = HWSerial.read();	
-        HWSerial.print("UART received: ");
-        HWSerial.println(incomingByte);
-
-		HWSerial.print(count + "\0");
-
-		COM[count] = incomingByte;
-		count++;
-
-		if (count >= 2)
-			count = 0;
-	}
-
-	if (COM[0] == 'S' && COM[1] == 'T')
-	{
-		HWSerial.println("Starting Drive");
-		MODE = 0;
-		COM[0] = '\0';
-		COM[1] = '\0';
-		return false;
-	}
-	else if (COM[0] == 'M' && COM[1] == 'N')
-	{
-		HWSerial.println("Starting Manual");
-		MODE = 1;
-		COM[0] = '\0';
-		COM[1] = '\0';
-		return false;
-	}
-	else if (COM[0] == 'P' && COM[1] == 'D')
-	{
-		HWSerial.println("PID Settings");
-		MODE = 2;
-		COM[0] = '\0';
-		COM[1] = '\0';
-		return false;
-	}
-
-	return true;
-}
-
 
 

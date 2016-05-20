@@ -14,9 +14,11 @@
 class BlueCom
 {
 	public:
-		BlueCom();
+		BlueCom( int );
 		
-		bool settings(carVars *);
+		int BTCheck();
+		bool settings(carVars &);
+		bool checkKill();
 };
 
 #endif

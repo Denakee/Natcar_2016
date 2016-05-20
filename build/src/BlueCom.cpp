@@ -7,12 +7,72 @@
 #include <cmath>
 #include "BlueCom.h"
 #include "HardwareSerial.h"
+#include "core_pins.h"
 
 #define HWSerial Serial1
 
-BlueCom::BlueCom () {}
+BlueCom::BlueCom ( int baud ) 
+{
+	HWSerial.begin (baud);
+	HWSerial.println ("Booting");
+}
 
-bool BlueCom::settings ( carVars * CVS )
+int BlueCom::BTCheck ()
+{
+	static char incomingByte='\0';
+	static char COM[2] = "";
+	static int count = 0;
+	
+	if (HWSerial.available() > 0) {
+		incomingByte = HWSerial.read();	
+        HWSerial.print("UART received: ");
+        HWSerial.println(incomingByte);
+
+		HWSerial.print(count + "\0");
+
+		COM[count] = incomingByte;
+		count++;
+
+		if (count >= 2)
+			count = 0;
+	}
+
+	if (COM[0] == 'S' && COM[1] == 'T')
+	{
+		HWSerial.println("Starting Drive");
+		COM[0] = '\0';
+		COM[1] = '\0';
+		return ON;
+	}
+	else if (COM[0] == 'M' && COM[1] == 'N')
+	{
+		HWSerial.println("Starting Manual");
+		COM[0] = '\0';
+		COM[1] = '\0';
+		return MANUAL;
+	}
+	else if (COM[0] == 'P' && COM[1] == 'D')
+	{
+		HWSerial.println("PID Settings");
+		COM[0] = '\0';
+		COM[1] = '\0';
+		return SETTINGS;
+	}
+	
+	return OFF;
+}
+
+bool BlueCom::checkKill ()
+{
+	while (HWSerial.available() > 0) {
+		if (HWSerial.read() == 'k')
+			return false;
+	}
+	
+	return true;
+}
+
+bool BlueCom::settings ( carVars & CVS )
 {
 	static int setting = 0;
 	static int count = 0;
@@ -26,13 +86,13 @@ bool BlueCom::settings ( carVars * CVS )
 			{
 				case 'w':
 					HWSerial.print ("kp: ");
-					HWSerial.println (CVS->kp);
+					HWSerial.println (CVS.kp);
 					HWSerial.print ("kd: ");
-					HWSerial.println (CVS->kd);
+					HWSerial.println (CVS.kd);
 					HWSerial.print ("ki: ");
-					HWSerial.println (CVS->ki);
+					HWSerial.println (CVS.ki);
 					HWSerial.print ("speed: ");
-					HWSerial.println (CVS->driveSpeed);
+					HWSerial.println (CVS.driveSpeed);
 					break;
 				case 'p':
 					setting = 1;
@@ -50,10 +110,10 @@ bool BlueCom::settings ( carVars * CVS )
 					setting = 5;
 					break;
 				case '0':
-					CVS->servoPos;
+					CVS.servoPos;
 					break;
 				case 'k':
-					CVS->mode = OFF;
+					CVS.mode = OFF;
 					return false;
 			}
 		}
@@ -73,27 +133,27 @@ bool BlueCom::settings ( carVars * CVS )
 					case 1:
 						HWSerial.print ("kp: ");
 						HWSerial.println (num);
-						CVS->kp = num;
+						CVS.kp = num;
 						break;
 					case 2:
 						HWSerial.print ("kd: ");
 						HWSerial.println (num);
-						CVS->kd = -num;
+						CVS.kd = -num;
 						break;
 					case 3:
-						CVS->ki = num;
+						CVS.ki = num;
 						HWSerial.print ("ki: ");
 						HWSerial.println (num);
 						break;
 					case 4:
-						CVS->driveSpeed = (int) (num * 10);
+						CVS.driveSpeed = (int) (num * 10);
 						HWSerial.print ("speed: ");
-						HWSerial.println (CVS->driveSpeed);
+						HWSerial.println (CVS.driveSpeed);
 						break;
 					case 5:
-						CVS->speedDiv = num * 10;
+						CVS.speedDiv = num * 10;
 						HWSerial.print ("speedDiv: ");
-						HWSerial.println (CVS->speedDiv);
+						HWSerial.println (CVS.speedDiv);
 						break;
 				}
 				num = 0;
@@ -101,7 +161,7 @@ bool BlueCom::settings ( carVars * CVS )
 				count = 0;
 			}	
 		}
-	}	
+	}		
 
 	return true;
 }
