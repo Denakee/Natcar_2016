@@ -8,17 +8,26 @@
 #include "HardwareSerial.h"
 
 #include "WProgram.h"
+
+#include "CamControl.h"
+#include "BlueCom.h"
+#include "DataStruct.h"
+
 //#include "Servo.h"
 
 //Working Values:
 //	kp = 0.58			/	0.7
 //	kd = -0.58, -0.53	/	1.4
 //	ki = 0.01			/	0.01
-volatile int driveSpeed = 350;		// Drive speed for motors.
-volatile float kp = 0.475;			// Proportional Correction Constant.
-volatile float kd = -0.7;// -0.6;			// Derivative Multiplier.
-volatile float ki = 0.0;//0.05;				// Integral Multiplier.
-volatile float speedDiv = 80;
+
+carVars CVS = { 250,		// Drive Speed for motors.
+				0,			// Servo Angle.
+				0.7,		// Proportional Correction Constant.
+				-1.4,		// Derivative Multiplier.
+				0.0,		// Integral Multiplier.
+				80,			// Speed Divider.
+				OFF};		// Drive State.
+
 const int centerPoint = 60;
 
 // BLUETOOTH START SETTING //
@@ -43,18 +52,18 @@ const int centerPoint = 60;
 #define PRINTLINE 0
 #define BAUD 115200
 
+#if SERIALBT
 #define HWSerial Serial1
+#else
+#define HWSerial Serial
+#endif
 
 // Variables //
 const int size = 128;			// Pixel Width of Line Cam.
 const int maxVal = 1024;		// Largest Light Val Output.
 
-const int clear = 1000;			// Delay for Cam Exposure.
-const int endDelay = 0;			// Large Delay for Image to Buffer over Serial (set to 0 when running).
-const int time = 2;				// Time for duty cycle calc.
-const float duty = 0.5;			// Duty cycle multiplier.
-const int d1 = time * duty;		// Calculating Time for On Period.
-const int d2 = time - d1;		// Calculating Time for Off Period.
+const int clear = 5000;			// Delay for Cam Exposure.
+const int endDelay = 100;		// Large Delay for Image to Buffer over Serial (set to 0 when running).
 
 const int mapScale = 50;		// Scaling of Map for Serial.
 
@@ -66,12 +75,11 @@ const int servoMid = 80;
 const int servoShift = 30;
 
 int MODE = 0;					// 0 = Automated, 1 = Manual, 2 = Settings
-bool ON = false;
 
 int error = 0;					// Accummulated Error (integral).
 int lastErr = 0;
 
-int intImage[size];				// Stores Raw Cam Data.
+int pixMap[size];				// Stores Raw Cam Data.
 int heightMap[size];			// Height Map for Printing.
 int derivative[size-1];			// Stores the Derivative of the Cam Data.
 int highBright = 0;
@@ -100,8 +108,15 @@ int main ()
 	// Attaching Servo.
 	pinMode (srv, OUTPUT);
 
+	CamControl cam ( clk, ao, si, size );
+	BlueCom bt;
+
 	// Initializing Serial.
 	HWSerial.begin(BAUD);	
+
+	//delay ( 2000 );
+
+	HWSerial.println("Booting");
 
 	//HWSerial.print("AT+PIN4678");
 		
@@ -133,25 +148,28 @@ int main ()
 			}
 		}
 		
-		ON = true;
+		CVS.mode = ON;
 
-		while (ON)
+		digitalWrite (brk, LOW);
+
+		while (CVS.mode)
 		{	
 			if (MODE == 0)
 			{
 				if (BTSTART)
 				{
-					if (!settings())
+					if (!bt.settings( & CVS ))
 						break;
 				}		
 	
 				// Takes a new scan from cam.
-				lineUpdate ();
-	
+				cam.clearBuffer ();
+				cam.lineUpdate ( pixMap, clear );
+
 				// PID.
 				drive      ();
 	
-				analogWrite (drv, driveSpeed - abs(driveSpeed * (lastErr/speedDiv)));
+				analogWrite (drv, CVS.driveSpeed - abs(CVS.driveSpeed * (lastErr/CVS.speedDiv)));
 				//analogWrite (drv, driveSpeed);
 				
 				if (PRINTLINE)
@@ -163,12 +181,18 @@ int main ()
 			else if (MODE == 1)
 				manualDrive();
 			else if (MODE == 2)
-				settings();
+			{
+				bt.settings( & CVS );
+			}
 		}
 		
 		//HWSerial.clear();
 
 		analogWrite (drv, 0);
+		analogWrite (srv, servoMid);
+		
+		digitalWrite (brk, HIGH);
+
 		HWSerial.print ("END. Sum Error: ");
 		HWSerial.println (error);
 		MODE = 0;
@@ -177,64 +201,11 @@ int main ()
 
 }
 
-void lineUpdate ()
-{
-	highBright = 0;
-
-	// Set Start High.
-	digitalWrite (si, HIGH);
-	delayMicroseconds (d1);
-	digitalWrite (clk, HIGH);
-	delayMicroseconds (d1);
-	digitalWrite (si, LOW);
-	delayMicroseconds (d1);
-	digitalWrite (clk, LOW);
-
-
-	// Clearing frame buffer.
-	for (int i = 1; i < size; i++) 
-	{
-		digitalWrite (clk, HIGH);
-		delayMicroseconds (d1);
-		digitalWrite (clk, LOW);	
-		delayMicroseconds (d2);
-	}
-
-	// Begin Start, delay while Frame is captured, begin new read start.
-	digitalWrite (si, HIGH);
-	delayMicroseconds (clear);
-	digitalWrite (si, LOW);
-	delayMicroseconds (d1);
-	digitalWrite (si, HIGH);
-	delayMicroseconds (d1);
-	digitalWrite (clk, HIGH);
-	delayMicroseconds (d1);
-	digitalWrite (si, LOW);
-	delayMicroseconds (d1);
-	digitalWrite (clk, LOW);	
-	intImage[0] = analogRead(ao);
-
-	// Read new image.
-	for (int i = 1; i < size; i++) 
-	{
-		digitalWrite (clk, HIGH);
-		delayMicroseconds (d1);
-		digitalWrite (clk, LOW);
-
-		intImage[i] = analogRead (ao);
-		if (intImage[i] > highBright)
-		{
-			highBright = i;
-		}
-	}
-
-}
-
 void linePrint ()
 {
 	for (int i = 0; i < size; i++)
 	{
-		heightMap[i] = intImage[i] / mapScale;
+		heightMap[i] = pixMap[i] / mapScale;
 	}
 
 	for (int i = maxVal / mapScale - 1; i > 0; i--)
@@ -263,11 +234,11 @@ void drive ()
 
 	double PID;
 
-	derivative[0] = intImage[0] - intImage[1];
+	derivative[0] = pixMap[0] - pixMap[1];
 
 	for (int i = 0; i < size - 4; i++)
 	{
-		derivative[i] = intImage[i] - intImage[i+1];	
+		derivative[i] = pixMap[i] - pixMap[i+1];	
 		
 		if ( derivative[i] > derivative[high] )
 		{
@@ -278,12 +249,16 @@ void drive ()
 			low = i;
 		}
 	}
-
+	
 	err = ((high + low)/2) - centerPoint;
 
+	if (abs(high-low) > 20 && 0) //|| 20 - abs(err) < lastErr) 
+	{
+		err = lastErr;
+	}
 	error += err;
 
-	PID = (err * kp) + (((lastErr - err)) * kd) + (error * ki);
+	PID = (err * CVS.kp) + (((lastErr - err)) * CVS.kd) + (error * CVS.ki);
 
 	if ( PID > -servoShift || PID < servoShift )
 	{
@@ -311,7 +286,7 @@ void manualDrive ()
 		switch (HWSerial.read())
 		{
 			case 'w':
-				analogWrite (drv, driveSpeed/1.5);
+				analogWrite (drv, CVS.driveSpeed/1.5);
 				break;
 			case 'a':
 				analogWrite (srv, servoMid - 20);
@@ -320,105 +295,12 @@ void manualDrive ()
 				analogWrite (srv, servoMid + 20);
 				break;
 			case 'k':
-				ON = false;
+				CVS.mode = OFF;
 				break;
 		}
 	}
 
 	delayMicroseconds(100000);
-}
-
-bool settings ()
-{
-	static int setting = 0;
-	static int count = 0;
-	static char digit = ' ';
-	static float num = 0;
-	
-	if (HWSerial.available() > 0) {
-		if (setting == 0)
-		{
-			switch (HWSerial.read())
-			{
-				case 'w':
-					HWSerial.print ("kp: ");
-					HWSerial.println (kp);
-					HWSerial.print ("kd: ");
-					HWSerial.println (kd);
-					HWSerial.print ("ki: ");
-					HWSerial.println (ki);
-					HWSerial.print ("speed: ");
-					HWSerial.println (driveSpeed);
-					break;
-				case 'p':
-					setting = 1;
-					break;
-				case 'd':
-					setting = 2;				
-					break;
-				case 'i':
-					setting = 3;
-					break;
-				case 's':
-					setting = 4;
-					break;
-				case 'v':
-					setting = 5;
-					break;
-				case 'k':
-					ON = false;
-					return false;
-			}
-		}
-		else
-		{
-			digit = HWSerial.read();
-			HWSerial.println(digit);
-			if (isdigit(digit) && digit != 'k')
-			{
-				num += ((digit-'0') / pow(10, count - 1));
-				count ++;
-			}
-			else if (digit == 'e')
-			{
-				switch (setting)
-				{
-					case 1:
-						HWSerial.print ("kp: ");
-						HWSerial.println (num);
-						kp = num;
-						break;
-					case 2:
-						HWSerial.print ("kd: ");
-						HWSerial.println (num);
-						kd = -num;
-						break;
-					case 3:
-						ki = num;
-						HWSerial.print ("ki: ");
-						HWSerial.println (num);
-						break;
-					case 4:
-						driveSpeed = (int) (num * 10);
-						HWSerial.print ("speed: ");
-						HWSerial.println (driveSpeed);
-						break;
-					case 5:
-						speedDiv = num * 10;
-						HWSerial.print ("speedDiv: ");
-						HWSerial.println (speedDiv);
-						break;
-				}
-				num = 0;
-				setting = 0;
-				count = 0;
-			}	
-		}
-	}	
-
-	delayMicroseconds(100000);
-
-	return true;
 }
 
 bool BTCheck ()
