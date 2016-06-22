@@ -5,6 +5,7 @@
  */
 
 #include <cmath>
+#include <stdlib.h>
 #include "BlueCom.h"
 #include "HardwareSerial.h"
 #include "core_pins.h"
@@ -21,24 +22,18 @@ int BlueCom::BTCheck ()
 {
 	static char incomingByte='\0';
 	static char COM[2] = "";
-	static int count = 0;
 	
 	if (HWSerial.available() > 0) {
 		incomingByte = HWSerial.read();	
-        HWSerial.print("UART received: ");
-        HWSerial.println(incomingByte);
-
-		HWSerial.print(count + "\0");
-
-		COM[count] = incomingByte;
-		count++;
-
-		if (count >= 2)
-			count = 0;
+        HWSerial.print(incomingByte);
+	
+		COM[0] = COM[1];
+		COM[1] = incomingByte;
 	}
 
 	if (COM[0] == 'S' && COM[1] == 'T')
 	{
+		HWSerial.println();
 		HWSerial.println("Starting Drive");
 		COM[0] = '\0';
 		COM[1] = '\0';
@@ -46,6 +41,7 @@ int BlueCom::BTCheck ()
 	}
 	else if (COM[0] == 'M' && COM[1] == 'N')
 	{
+		HWSerial.println();
 		HWSerial.println("Starting Manual");
 		COM[0] = '\0';
 		COM[1] = '\0';
@@ -53,6 +49,7 @@ int BlueCom::BTCheck ()
 	}
 	else if (COM[0] == 'P' && COM[1] == 'D')
 	{
+		HWSerial.println();
 		HWSerial.println("PID Settings");
 		COM[0] = '\0';
 		COM[1] = '\0';
@@ -77,6 +74,7 @@ bool BlueCom::settings ( carVars & CVS )
 	static int setting = 0;
 	static int count = 0;
 	static char digit = ' ';
+	static char * digits = new char[32];
 	static float num = 0;
 	
 	if (HWSerial.available() > 0) {
@@ -95,18 +93,23 @@ bool BlueCom::settings ( carVars & CVS )
 					HWSerial.println (CVS.driveSpeed);
 					break;
 				case 'p':
+					HWSerial.print ("kp: ");
 					setting = 1;
 					break;
 				case 'd':
-					setting = 2;				
+					HWSerial.print ("kd ");
+					setting = 2;			
 					break;
 				case 'i':
+					HWSerial.print ("ki: ");
 					setting = 3;
 					break;
 				case 's':
+					HWSerial.print ("speed: ");
 					setting = 4;
 					break;
 				case 'v':
+					HWSerial.print ("speedDiv: ");
 					setting = 5;
 					break;
 				case '0':
@@ -119,46 +122,48 @@ bool BlueCom::settings ( carVars & CVS )
 		}
 		else
 		{
+			
 			digit = HWSerial.read();
-			HWSerial.println(digit);
-			if (isdigit(digit) && digit != 'k')
+			
+			if (isdigit(digit) || digit == '.')
 			{
-				num += ((digit-'0') / pow(10, count - 1));
+				HWSerial.print(digit);
+
+				digits[count] = digit;
 				count ++;
 			}
 			else if (digit == 'e')
 			{
+				HWSerial.println();
+				
+				digits[count] = '\0';
+				num = atof(digits);
+
 				switch (setting)
-				{
+				{					
 					case 1:
-						HWSerial.print ("kp: ");
-						HWSerial.println (num);
 						CVS.kp = num;
 						break;
 					case 2:
-						HWSerial.print ("kd: ");
-						HWSerial.println (num);
-						CVS.kd = -num;
+						CVS.kd = num;
 						break;
 					case 3:
 						CVS.ki = num;
-						HWSerial.print ("ki: ");
-						HWSerial.println (num);
 						break;
 					case 4:
-						CVS.driveSpeed = (int) (num * 10);
-						HWSerial.print ("speed: ");
-						HWSerial.println (CVS.driveSpeed);
+						CVS.driveSpeed = (int) num;
 						break;
 					case 5:
-						CVS.speedDiv = num * 10;
-						HWSerial.print ("speedDiv: ");
-						HWSerial.println (CVS.speedDiv);
+						CVS.speedDiv = num;
 						break;
 				}
+
+				HWSerial.println("OK");
+
 				num = 0;
 				setting = 0;
 				count = 0;
+				digits[0] = 0;
 			}	
 		}
 	}		
